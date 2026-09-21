@@ -521,6 +521,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      admin_stats: { Args: never; Returns: Json }
       current_role_name: { Args: never; Returns: string }
       has_role: {
         Args: {
