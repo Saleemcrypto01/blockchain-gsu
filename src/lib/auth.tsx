@@ -15,6 +15,9 @@ export type Profile = {
 
 type AuthState = {
   loading: boolean;
+  /** true once a profile/role lookup has completed (successfully or not) for the current session */
+  resolved: boolean;
+  error: string | null;
   session: Session | null;
   user: User | null;
   profile: Profile | null;
@@ -30,20 +33,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const [resolved, setResolved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const loadProfile = useCallback(async (userId: string | undefined) => {
     if (!userId) {
       setProfile(null);
       setRole(null);
+      setError(null);
+      setResolved(true);
       return;
     }
-    const [{ data: profileRow }, { data: roleRows }] = await Promise.all([
+    const [profileRes, rolesRes] = await Promise.all([
       supabase.from("profiles").select("id, email, full_name, phone, avatar_url, is_active").eq("id", userId).maybeSingle(),
       supabase.from("user_roles").select("role").eq("user_id", userId),
     ]);
-    setProfile((profileRow as Profile | null) ?? null);
-    const roles = (roleRows ?? []).map((r) => r.role as AppRole);
+    const failure = profileRes.error ?? rolesRes.error;
+    if (failure) {
+      console.error("Auth profile/role lookup failed", failure);
+      setError(failure.message);
+      setProfile(null);
+      setRole(null);
+      setResolved(true);
+      return;
+    }
+    setError(null);
+    setProfile((profileRes.data as Profile | null) ?? null);
+    const roles = (rolesRes.data ?? []).map((r) => r.role as AppRole);
     setRole(roles.includes("admin") ? "admin" : roles.includes("supervisor") ? "supervisor" : roles[0] ?? null);
+    setResolved(true);
   }, []);
 
   useEffect(() => {
