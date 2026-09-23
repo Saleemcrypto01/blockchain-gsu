@@ -14,7 +14,7 @@ type Mode = "login" | "register";
 type RoleChoice = "student" | "supervisor" | "admin";
 
 export const Route = createFileRoute("/auth")({
-  validateSearch: (search: Record<string, unknown>): { mode?: Mode } => ({
+  validateSearch: (search: Record<string, unknown>): { mode?: Mode | undefined } => ({
     mode: search["mode"] === "register" ? "register" : undefined,
   }),
   head: () => ({
