@@ -104,11 +104,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
     setRole(null);
     setSession(null);
+    setError(null);
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ loading, session, user: session?.user ?? null, profile, role, refresh, signOut }),
-    [loading, session, profile, role, refresh, signOut],
+    () => ({
+      loading,
+      resolved,
+      error,
+      session,
+      user: session?.user ?? null,
+      profile,
+      role,
+      refresh,
+      signOut,
+    }),
+    [loading, resolved, error, session, profile, role, refresh, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
