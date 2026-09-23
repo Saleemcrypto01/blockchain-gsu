@@ -72,6 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (event === "SIGNED_OUT") {
         setProfile(null);
         setRole(null);
+        setError(null);
+        setResolved(true);
       } else if (nextSession?.user) {
         void loadProfile(nextSession.user.id);
       }
