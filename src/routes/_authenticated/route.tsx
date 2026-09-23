@@ -16,17 +16,45 @@ export const Route = createFileRoute("/_authenticated")({
 });
 
 function AuthedLayout() {
-  const { loading, role, session } = useAuth();
+  const { loading, resolved, error, role, session, refresh, signOut } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
     if (!loading && !session) void navigate({ to: "/auth", replace: true });
   }, [loading, session, navigate]);
 
-  if (loading || !role) {
+  if (loading || !resolved) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="size-6 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!role) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="surface-card max-w-md p-6 text-center">
+          <h1 className="text-lg font-bold">Your account isn't set up yet</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {error
+              ? `We couldn't load your account details: ${error}`
+              : "No role has been assigned to this account, so there is no dashboard to show. Please contact an administrator."}
+          </p>
+          <div className="mt-5 flex justify-center gap-2">
+            <Button variant="outline" onClick={() => void refresh()}>
+              Try again
+            </Button>
+            <Button
+              onClick={async () => {
+                await signOut();
+                void navigate({ to: "/auth", replace: true });
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }
