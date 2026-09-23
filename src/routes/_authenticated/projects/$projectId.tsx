@@ -1,9 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
-import { BookMarked, FileText } from "lucide-react";
+import { BookMarked, Download, Upload } from "lucide-react";
 import { EmptyState, PageHeader } from "@/components/app/DashboardLayout";
 import { ErrorState, LoadingState, UnauthorizedState } from "@/components/app/PageStates";
 import { StatusBadge } from "@/components/app/StatusBadge";
+import { Button } from "@/components/ui/button";
+import { getDocumentUrl } from "@/lib/fyp.functions";
+import { sha256File } from "@/lib/hash";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { useAuth } from "@/lib/auth";
@@ -14,14 +17,17 @@ export const Route = createFileRoute("/_authenticated/projects/$projectId")({
 
 type Project = Tables<"projects">;
 type Version = Tables<"project_versions">;
+const chapters = [1, 2, 3, 4, 5] as const;
 
 function ProjectDetailsPage() {
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { projectId } = Route.useParams();
   const [project, setProject] = useState<Project | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingChapter, setUploadingChapter] = useState<number | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,6 +57,65 @@ function ProjectDetailsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const latestByChapter = new Map<number, Version>();
+  for (const version of versions) {
+    if (version.chapter_number && !latestByChapter.has(version.chapter_number)) {
+      latestByChapter.set(version.chapter_number, version);
+    }
+  }
+
+  const uploadChapter = async (chapter: number, file: File | undefined) => {
+    if (!file || !project || role !== "student" || !user) return;
+    if (file.type !== "application/pdf" || !file.name.toLowerCase().endsWith(".pdf")) {
+      setError("Each chapter must be a PDF file.");
+      return;
+    }
+    setUploadingChapter(chapter);
+    setError(null);
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const path = `${project.id}/chapter-${chapter}/${Date.now()}-${safeName}`;
+    const { error: uploadError } = await supabase.storage.from("project-documents").upload(path, file, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+    if (uploadError) {
+      setError(uploadError.message);
+      setUploadingChapter(null);
+      return;
+    }
+    const documentHash = await sha256File(file);
+    const nextVersion = Math.max(0, ...versions.map((version) => version.version_number)) + 1;
+    const { error: insertError } = await supabase.from("project_versions").insert({
+      project_id: project.id,
+      chapter_number: chapter,
+      version_number: nextVersion,
+      file_path: path,
+      file_name: file.name,
+      file_size: file.size,
+      mime_type: "application/pdf",
+      document_hash: documentHash,
+      uploaded_by: user.id,
+    });
+    if (insertError) {
+      setError(insertError.message);
+      setUploadingChapter(null);
+      return;
+    }
+    await supabase.from("projects").update({ current_version: nextVersion }).eq("id", project.id);
+    setUploadingChapter(null);
+    await load();
+  };
+
+  const openDocument = async (version: Version) => {
+    setDownloadError(null);
+    try {
+      const result = await getDocumentUrl({ data: { versionId: version.id } });
+      window.open(result.url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Could not open document.");
+    }
+  };
 
   if (role === "student" || role === "supervisor" || role === "admin") {
     return (
@@ -94,7 +159,46 @@ function ProjectDetailsPage() {
               </dl>
             </div>
 
-            {versions.length === 0 ? (
+            {role === "student" ? (
+              <div className="space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold">Project chapters</h2>
+                  <p className="text-sm text-muted-foreground">Upload one PDF for each chapter. Replacing a chapter creates a new version and keeps its history.</p>
+                </div>
+                {downloadError ? <p className="text-sm text-destructive">{downloadError}</p> : null}
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {chapters.map((chapter) => {
+                    const version = latestByChapter.get(chapter);
+                    return (
+                      <div key={chapter} className="rounded-md border p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <h3 className="font-medium">Chapter {chapter}</h3>
+                            <p className="mt-1 text-sm text-muted-foreground">{version?.file_name ?? "No file uploaded"}</p>
+                          </div>
+                          <StatusBadge status={version ? "uploaded" : "pending"} />
+                        </div>
+                        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                          <div><dt>File type</dt><dd className="text-foreground">{version?.mime_type ?? "PDF only"}</dd></div>
+                          <div><dt>Uploaded</dt><dd className="text-foreground">{version ? new Date(version.created_at).toLocaleString() : "—"}</dd></div>
+                        </dl>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <Button type="button" variant="outline" size="sm" disabled={!version} onClick={() => version && void openDocument(version)}>
+                            <Download className="mr-2 size-4" /> View / Download
+                          </Button>
+                          <Button type="button" variant="outline" size="sm" asChild disabled={uploadingChapter === chapter}>
+                            <label>
+                              <Upload className="mr-2 size-4" /> {uploadingChapter === chapter ? "Uploading..." : version ? "Replace" : "Upload PDF"}
+                              <input className="sr-only" type="file" accept="application/pdf,.pdf" onChange={(event) => void uploadChapter(chapter, event.target.files?.[0])} />
+                            </label>
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : versions.length === 0 ? (
               <EmptyState
                 title="No uploaded versions yet"
                 description="Upload a document version before submitting for review."

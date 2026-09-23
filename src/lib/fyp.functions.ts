@@ -272,7 +272,7 @@ export const getChainStatus = createServerFn({ method: "GET" })
 
 export const submitProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: { projectId: string; versionId: string; isFinal?: boolean }) => input)
+  .inputValidator((input: { projectId: string; isFinal?: boolean }) => input)
   .handler(async ({ data, context }) => {
     const db = await admin();
     const userId = context.userId;
@@ -285,18 +285,33 @@ export const submitProject = createServerFn({ method: "POST" })
       throw new Error("A submission is already awaiting review.");
     }
 
-    const { data: version } = await db
-      .from("project_versions").select("*").eq("id", data.versionId).eq("project_id", data.projectId).maybeSingle();
-    if (!version) throw new Error("Document version not found");
-
-    // Re-hash the stored file server-side; never trust the client hash.
-    const { data: file, error: dlError } = await db.storage.from(BUCKET).download(version.file_path);
-    if (dlError || !file) throw new Error("Could not read the uploaded document.");
-    const { sha256Hex, recordKeyFor } = await import("./chain.server");
-    const serverHash = await sha256Hex(await file.arrayBuffer());
-    if (serverHash !== version.document_hash) {
-      throw new Error("Document integrity check failed — the stored file does not match its recorded hash.");
+    const { data: versions } = await db
+      .from("project_versions")
+      .select("*")
+      .eq("project_id", data.projectId)
+      .not("chapter_number", "is", null)
+      .order("version_number", { ascending: false });
+    const currentVersions = [1, 2, 3, 4, 5].map((chapter) =>
+      (versions ?? []).find((version) => version.chapter_number === chapter),
+    );
+    if (currentVersions.some((version) => !version)) {
+      throw new Error("Upload Chapter One through Chapter Five before submitting.");
     }
+
+    // Re-hash every current stored chapter server-side; never trust client hashes.
+    const { sha256Hex, recordKeyFor } = await import("./chain.server");
+    const hashes: string[] = [];
+    for (const version of currentVersions) {
+      const { data: file, error: dlError } = await db.storage.from(BUCKET).download(version!.file_path);
+      if (dlError || !file) throw new Error("Could not read an uploaded chapter.");
+      const chapterHash = await sha256Hex(await file.arrayBuffer());
+      if (chapterHash !== version!.document_hash) {
+        throw new Error("Document integrity check failed — a stored chapter does not match its recorded hash.");
+      }
+      hashes.push(chapterHash);
+    }
+    const serverHash = await sha256Hex(new TextEncoder().encode(hashes.join(":" )).buffer);
+    const version = currentVersions[0]!;
 
     const { data: submission, error: subError } = await db
       .from("submissions")
@@ -433,16 +448,30 @@ export const verifySubmission = createServerFn({ method: "POST" })
 
     const db = await admin();
     const { data: version } = await db.from("project_versions").select("*").eq("id", allowed.version_id).maybeSingle();
+    const { data: projectVersions } = await db
+      .from("project_versions")
+      .select("*")
+      .eq("project_id", allowed.project_id)
+      .not("chapter_number", "is", null)
+      .order("version_number", { ascending: false });
     const { data: record } = await db
       .from("blockchain_records").select("*").eq("submission_id", allowed.id).maybeSingle();
 
     let computedHash: string | null = null;
     let storageOk = false;
-    if (version) {
-      const { data: file } = await db.storage.from(BUCKET).download(version.file_path);
-      if (file) {
-        const { sha256Hex } = await import("./chain.server");
-        computedHash = await sha256Hex(await file.arrayBuffer());
+    const currentVersions = [1, 2, 3, 4, 5].map((chapter) =>
+      (projectVersions ?? []).find((item) => item.chapter_number === chapter),
+    );
+    if (currentVersions.every(Boolean)) {
+      const chapterHashes: string[] = [];
+      const { sha256Hex } = await import("./chain.server");
+      for (const currentVersion of currentVersions) {
+        const { data: file } = await db.storage.from(BUCKET).download(currentVersion!.file_path);
+        if (!file) break;
+        chapterHashes.push(await sha256Hex(await file.arrayBuffer()));
+      }
+      if (chapterHashes.length === 5) {
+        computedHash = await sha256Hex(new TextEncoder().encode(chapterHashes.join(":")).buffer);
         storageOk = true;
       }
     }
