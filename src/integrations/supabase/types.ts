@@ -175,7 +175,6 @@ export type Database = {
       }
       project_versions: {
         Row: {
-          chapter_number: number | null
           created_at: string
           document_hash: string
           file_name: string
@@ -189,7 +188,6 @@ export type Database = {
           version_number: number
         }
         Insert: {
-          chapter_number?: number | null
           created_at?: string
           document_hash: string
           file_name: string
@@ -203,7 +201,6 @@ export type Database = {
           version_number: number
         }
         Update: {
-          chapter_number?: number | null
           created_at?: string
           document_hash?: string
           file_name?: string
